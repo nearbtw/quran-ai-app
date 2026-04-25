@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quran AI Hifz</title>
+  <style>
+    :root{--bg:#f8fafc;--card:#fff;--primary:#0ea5e9;--success:#10b981;--warning:#f59e0b;--danger:#ef4444;--sub:#64748b}
+    *{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif}
+    body{background:var(--bg);color:#1e293b;padding-bottom:100px}
+    .header{background:var(--card);padding:16px;position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.05)}
+    .title{font-size:22px;font-weight:700;margin-bottom:4px}
+    .stats{display:flex;gap:12px;font-size:14px;color:var(--sub)}
+    .progress-bar{height:6px;background:#e2e8f0;border-radius:3px;margin-top:8px;overflow:hidden}
+    .progress-fill{height:100%;background:var(--success);width:0%;transition:.3s}
+    .controls{background:var(--card);padding:12px;position:sticky;top:80px;z-index:9}
+    input{width:100%;padding:12px;border:1px solid #e2e8f0;border-radius:8px;font-size:16px;margin-bottom:8px;outline:none}
+    input:focus{border-color:var(--primary)}
+    .filters{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+    .filter-btn{padding:8px 16px;border-radius:20px;border:none;background:#f1f5f9;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap}
+    .filter-btn.active{background:var(--primary);color:#fff}
+    .list{padding:16px;max-width:800px;margin:0 auto}
+    .surah-card{background:var(--card);border-radius:12px;margin-bottom:12px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.05)}
+    .surah-header{padding:16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+    .surah-header:hover{background:#f8fafc}
+    .surah-name{font-size:18px;font-weight:600}
+    .surah-meta{font-size:12px;color:var(--sub);margin-top:2px}
+    .ayah{padding:16px;border-top:1px solid #f1f5f9;display:none}
+    .ayah.show{display:block}
+    .ayah-text{font-size:20px;text-align:right;line-height:1.8;margin-bottom:12px;color:#0f172a;direction:rtl}
+    .ayah-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+    .badge{padding:4px 8px;border-radius:6px;font-size:12px;font-weight:600;text-transform:capitalize}
+    .badge.new{background:#f1f5f9;color:var(--sub)}
+    .badge.learning{background:#fef3c7;color:#d97706}
+    .badge.memorized{background:#d1fae5;color:#059669}
+    .badge.review{background:#fee2e2;color:#dc2626}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+    .btn{padding:8px 12px;border-radius:6px;border:none;cursor:pointer;font-size:14px;font-weight:500;background:#f8fafc}
+    .btn.play{background:var(--primary);color:#fff}
+    .btn.done{background:var(--success);color:#fff}
+    .btn.record{background:var(--warning);color:#fff}
+    .btn.stop{background:var(--danger);color:#fff;animation:pulse 1s infinite}
+    @keyframes pulse{0%{opacity:1}50%{opacity:.6}100%{opacity:1}}
+    .empty{text-align:center;padding:40px;color:var(--sub)}
+    .export-btn{position:fixed;bottom:20px;right:20px;background:var(--primary);color:#fff;padding:12px 20px;border-radius:30px;border:none;cursor:pointer;font-weight:600;box-shadow:0 4px 12px rgba(14,165,233,.3);z-index:20}
+    .export-btn:hover{background:#0284c7}
+    .loading{color:var(--sub);text-align:center;padding:12px}
+    .feedback{margin-top:10px;padding:10px;background:#f8fafc;border-radius:8px;font-size:14px}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">📖 Quran AI Hifz</div>
+    <div class="stats">
+      <span>🔥 <span id="streak">0</span>d</span>
+      <span>🎯 <span id="today">0</span>/<span id="goal">5</span></span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+  </div>
+  <div class="controls">
+    <input type="text" id="search" placeholder="🔍 Search surah name, number, or Arabic...">
+    <div class="filters" id="filters"></div>
+  </div>
+  <div class="list" id="list"><div class="loading">Loading Surahs...</div></div>
+  <button class="export-btn" onclick="exportCSV()">📤 Export</button>
+
+  <script>
+    const API = window.location.origin;
+    let state = { streak:0, goal:5, today:0, filter:'all', expanded:null, playing:null, recording:null, progress:{} };
+    let audio = null, mediaRecorder = null, chunks = [];
+
+    async function loadState() {
+      try { const res = await fetch(`${API}/api/progress`); const d = await res.json(); state = {...state, ...d}; } catch {}
+      render();
+    }
+
+    async function saveState() {
+      await fetch(`${API}/api/progress`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(state)});
+      render();
+    }
+
+    async function loadVerses(surahId) {
+      if(state.expanded !== surahId) return;
+      const list = document.getElementById('list');
+      const card = list.querySelector(`[data-surah="${surahId}"] .ayah-container`);
+      if(!card) return;
+      card.innerHTML = '<div class="loading">Loading verses...</div>';
+      try {
+        const res = await fetch(`${API}/api/verses/${surahId}`);
+        const verses = await res.json();
+        state.expanded = surahId;
+        renderVerses(card, verses, surahId);
+      } catch { card.innerHTML = '<div class="empty">Failed to load. Check internet.</div>'; }
+    }
+
+    function renderVerses(container, verses, surahId) {
+      container.innerHTML = verses.filter(v => state.filter==='all' || (state.progress[v.id]?.status || 'new') === state.filter)
+        .map(v => {
+          const p = state.progress[v.id] || {status:'new'};
+          return `
+          <div class="ayah show" id="ayah-${v.id}">
+            <div class="ayah-text">${v.text}</div>
+            <div class="ayah-header">
+              <span>Ayah ${v.number}</span>
+              <span class="badge ${p.status}">${p.status}</span>
+            </div>
+            <div class="actions">
+              <button class="btn play" onclick="toggleAudio('${v.id}','${v.audio}')">${state.playing===v.id?'⏸':'▶'}</button>
+              <button class="btn done" onclick="setStatus('${v.id}','memorized')">✅ Memorized</button>
+              <button class="btn record" id="rec-${v.id}" onclick="startRecord('${v.id}')">🎤 Record</button>
+            </div>
+            <div class="feedback" id="feedback-${v.id}" style="display:none"></div>
+          </div>`;
+        }).join('');
+    }
+
+    function render() {
+      document.getElementById('streak').textContent = state.streak;
+      document.getElementById('today').textContent = state.today;
+      document.getElementById('goal').textContent = state.goal;
+      document.getElementById('progressFill').style.width = `${Math.min(100,(state.today/state.goal)*100)}%`;
+      document.getElementById('filters').innerHTML = ['all','new','learning','memorized','review'].map(f=>`<button class="filter-btn ${state.filter===f?'active':''}" onclick="state.filter='${f}';saveState()">${f}</button>`).join('');
+      document.getElementById('search').addEventListener('input', e => filterSurahs(e.target.value.toLowerCase()));
+      if(!document.querySelector('.surah-card')) fetchSurahs();
+    }
+
+    async function fetchSurahs() {
+      const res = await fetch(`${API}/api/surahs`);
+      const surahs = await res.json();
+      document.getElementById('list').innerHTML = surahs.map(s => `
+        <div class="surah-card" data-surah="${s.id}">
+          <div class="surah-header" onclick="toggleSurah(${s.id})">
+            <div><div class="surah-name">${s.id}. ${s.name}</div><div class="surah-meta">${s.type} • ${s.count} ayahs</div></div>
+            <span id="arrow-${s.id}">▶</span>
+          </div>
+          <div class="ayah-container" id="verses-${s.id}"></div>
+        </div>
+      `).join('');
+      render();
+    }
+
+    function toggleSurah(id) {
+      if(state.expanded === id) { state.expanded = null; document.getElementById('arrow-'+id).textContent='▶'; document.getElementById('verses-'+id).innerHTML=''; return; }
+      state.expanded = id;
+      document.querySelectorAll('.surah-card').forEach(c => c.querySelector('.surah-header span').textContent='▶');
+      document.getElementById('arrow-'+id).textContent='▼';
+      loadVerses(id);
+    }
+
+    function filterSurahs(q) {
+      document.querySelectorAll('.surah-card').forEach(c => {
+        const name = c.querySelector('.surah-name').textContent.toLowerCase();
+        const ar = c.querySelector('.surah-meta').textContent.toLowerCase();
+        c.style.display = name.includes(q) || ar.includes(q) ? 'block' : 'none';
+      });
+    }
+
+    function toggleAudio(id, url) {
+      if(state.playing === id) { audio.pause(); state.playing = null; saveState(); return; }
+      if(audio) audio.pause();
+      audio = new Audio(url);
+      audio.play().catch(()=>alert("Audio blocked. Click anywhere first."));
+      audio.onended = () => { state.playing = null; saveState(); };
+      state.playing = id;
+      saveState();
+    }
+
+    function setStatus(id, status) {
+      state.progress[id] = {status, score: status==='memorized'?95:state.progress[id]?.score||0};
+      if(status==='memorized' && state.today < state.goal) { state.today++; updateStreak(); }
+      saveState();
+    }
+
+    function updateStreak() {
+      const today = new Date().toDateString();
+      if(state.last_date !== today) {
+        const diff = Math.floor((new Date(today) - new Date(state.last_date||today))/864e5);
+        state.streak = diff===1?state.streak+1:1; state.last_date=today;
+      }
+    }
+
+    async function startRecord(id) {
+      if(!navigator.mediaDevices) return alert("Microphone not supported");
+      const btn = document.getElementById(`rec-${id}`);
+      if(state.recording === id) {
+        mediaRecorder.stop(); state.recording = null; btn.textContent='🎤 Record'; btn.className='btn record'; return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+        mediaRecorder = new MediaRecorder(stream);
+        chunks = [];
+        mediaRecorder.ondataavailable = e => chunks.push(e.data);
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach(t=>t.stop());
+          btn.textContent='⏳ Analyzing...'; btn.disabled=true;
+          const blob = new Blob(chunks, {type:'audio/webm'});
+          const fd = new FormData(); fd.append('file', blob, 'rec.webm');
+          const res = await fetch(`${API}/api/transcribe`, {method:'POST', body:fd});
+          const data = await res.json();
+          const feedback = document.getElementById(`feedback-${id}`);
+          feedback.style.display='block';
+          feedback.innerHTML = `<strong>Transcribed:</strong> ${data.text}<br><strong>Words:</strong> ${data.words?.length || 0}`;
+          btn.textContent='🎤 Record'; btn.disabled=false; btn.className='btn record';
+          setStatus(id, 'memorized');
+        };
+        mediaRecorder.start(); state.recording = id; btn.textContent='⏹ Stop'; btn.className='btn stop';
+      } catch(e) { alert("Mic permission denied"); }
+    }
+
+    function exportCSV() {
+      let csv = "Ayah,Status,Score\n";
+      for(let [k,v] of Object.entries(state.progress)) csv += `${k},${v.status},${v.score||0}\n`;
+      const blob = new Blob([csv], {type:'text/csv'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download='hifz_progress.csv'; a.click();
+    }
+
+    loadState();
+  </script>
+</body>
+</html>
